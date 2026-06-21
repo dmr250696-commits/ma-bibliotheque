@@ -1,5 +1,8 @@
 // Recherche les infos d'un livre (titre, auteur, couverture) à partir d'un ISBN.
-// Essaie Open Library en premier, puis Google Books en secours.
+// Essaie Open Library (API books), puis Google Books, puis l'index de
+// recherche Open Library (qui couvre parfois des éditions absentes de
+// l'API books) — utile notamment pour des éditions françaises moins
+// répandues internationalement.
 
 async function fetchFromOpenLibrary(isbn) {
   const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`)
@@ -42,16 +45,38 @@ async function fetchFromGoogleBooks(isbn) {
   }
 }
 
+async function fetchFromOpenLibrarySearch(isbn) {
+  const res = await fetch(
+    `https://openlibrary.org/search.json?isbn=${isbn}&fields=title,author_name,cover_i,publisher,first_publish_year,number_of_pages_median,subject`
+  )
+  if (!res.ok) return null
+  const data = await res.json()
+  const doc = data.docs?.[0]
+  if (!doc) return null
+
+  return {
+    isbn,
+    titre: doc.title || '',
+    auteur: (doc.author_name || []).join(', ') || '',
+    couverture: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg` : null,
+    editeur: (doc.publisher || [])[0] || '',
+    annee: doc.first_publish_year ? String(doc.first_publish_year) : '',
+    nb_pages: doc.number_of_pages_median || null,
+    categories_api: (doc.subject || []).slice(0, 3).join(', ') || ''
+  }
+}
+
 export async function lookupBookByIsbn(isbn) {
   const cleanIsbn = isbn.replace(/[^0-9Xx]/g, '')
 
   let resultatOpenLibrary = null
   let resultatGoogle = null
+  let resultatOpenLibrarySearch = null
 
   try {
     resultatOpenLibrary = await fetchFromOpenLibrary(cleanIsbn)
   } catch (e) {
-    console.warn('Open Library indisponible', e)
+    console.warn('Open Library (books) indisponible', e)
   }
 
   try {
@@ -60,18 +85,38 @@ export async function lookupBookByIsbn(isbn) {
     console.warn('Google Books indisponible', e)
   }
 
-  if (!resultatOpenLibrary && !resultatGoogle) return null
+  // On n'interroge l'index de recherche que si les deux premières sources
+  // n'ont rien donné de complet, pour limiter le nombre de requêtes.
+  const openLibraryOk = resultatOpenLibrary?.titre?.trim()
+  const googleOk = resultatGoogle?.titre?.trim()
+  if (!openLibraryOk && !googleOk) {
+    try {
+      resultatOpenLibrarySearch = await fetchFromOpenLibrarySearch(cleanIsbn)
+    } catch (e) {
+      console.warn('Open Library (search) indisponible', e)
+    }
+  }
 
-  // Fusion : on part de la source qui a un titre, on comble les trous avec l'autre
-  const base = resultatOpenLibrary?.titre ? resultatOpenLibrary : resultatGoogle
-  const appoint = base === resultatOpenLibrary ? resultatGoogle : resultatOpenLibrary
+  // Diagnostic visible dans la console du navigateur, utile en cas de souci.
+  console.info('Résultat ISBN', cleanIsbn, {
+    resultatOpenLibrary,
+    resultatGoogle,
+    resultatOpenLibrarySearch
+  })
 
-  if (!base) return null
-  if (!appoint) return base
+  const sourcesValides = [resultatOpenLibrary, resultatGoogle, resultatOpenLibrarySearch].filter(
+    (r) => r?.titre?.trim()
+  )
 
+  if (sourcesValides.length === 0) return null
+
+  // On part de la première source valide, on comble les trous avec les autres.
+  const [base, ...autres] = sourcesValides
   const fusionne = { ...base }
-  for (const cle of ['couverture', 'editeur', 'annee', 'nb_pages', 'categories_api', 'auteur']) {
-    if (!fusionne[cle] && appoint[cle]) fusionne[cle] = appoint[cle]
+  for (const appoint of autres) {
+    for (const cle of ['couverture', 'editeur', 'annee', 'nb_pages', 'categories_api', 'auteur']) {
+      if (!fusionne[cle] && appoint[cle]) fusionne[cle] = appoint[cle]
+    }
   }
   return fusionne
 }
