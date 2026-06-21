@@ -6,8 +6,27 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
   const videoRef = useRef(null)
   const controlsRef = useRef(null)
   const readerRef = useRef(null)
+  const streamRef = useRef(null)
   const [erreur, setErreur] = useState(null)
   const [demarre, setDemarre] = useState(false)
+
+  // iOS Safari ne permet pas de piloter le focus directement via l'API web.
+  // Ce contournement, largement utilisé en pratique, force la piste vidéo à
+  // se réinitialiser légèrement (changement mineur de résolution), ce qui
+  // pousse le système caméra natif à refaire le point automatiquement.
+  async function redeclencherFocus() {
+    const track = streamRef.current?.getVideoTracks?.()[0]
+    if (!track) return
+    try {
+      const reglages = track.getSettings?.() || {}
+      const largeurActuelle = reglages.width || 1280
+      await track.applyConstraints({ width: { ideal: largeurActuelle - 1 } })
+      await track.applyConstraints({ width: { ideal: largeurActuelle } })
+    } catch (e) {
+      // Pas grave si ça échoue : c'est un simple coup de pouce, pas une fonctionnalité critique.
+      console.warn('Re-déclenchement du focus impossible', e)
+    }
+  }
 
   useEffect(() => {
     let annule = false
@@ -49,8 +68,8 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
           audio: false,
           video: {
             facingMode: 'environment',
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
           }
         },
         videoRef.current,
@@ -77,6 +96,7 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
           return
         }
         controlsRef.current = controls
+        streamRef.current = videoRef.current?.srcObject || null
         setDemarre(true)
       })
       .catch((err) => {
@@ -131,7 +151,7 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
 
         <p style={styles.consigne}>Vise le code-barres au dos du livre (zone ISBN), à environ 10-15 cm.</p>
 
-        <div style={styles.zoneCameraWrapper}>
+        <div style={styles.zoneCameraWrapper} onClick={redeclencherFocus}>
           <video ref={videoRef} style={styles.video} muted playsInline autoPlay />
           {demarre && (
             <div style={styles.guideOverlay} aria-hidden="true">
@@ -144,6 +164,12 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
             </div>
           )}
         </div>
+
+        {demarre && (
+          <button type="button" onClick={redeclencherFocus} style={styles.boutonFocus}>
+            🔄 Image floue ? Touche ici pour refaire le point
+          </button>
+        )}
 
         {erreur && (
           <div style={styles.erreurBox}>
@@ -204,7 +230,8 @@ const styles = {
     borderRadius: '10px',
     overflow: 'hidden',
     minHeight: '240px',
-    background: '#000'
+    background: '#000',
+    cursor: 'pointer'
   },
   video: {
     width: '100%',
@@ -255,6 +282,17 @@ const styles = {
     border: '1.5px solid var(--leather)',
     background: 'transparent',
     color: 'var(--leather)',
+    fontWeight: 600
+  },
+  boutonFocus: {
+    width: '100%',
+    marginTop: '10px',
+    padding: '11px',
+    borderRadius: '8px',
+    border: '1px solid rgba(60,42,30,0.18)',
+    background: 'var(--paper-dim)',
+    color: 'var(--ink-soft)',
+    fontSize: '0.85rem',
     fontWeight: 600
   }
 }
