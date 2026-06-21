@@ -19,6 +19,7 @@ export default function App() {
   const [recherche, setRecherche] = useState('')
   const [rechercheIsbnEnCours, setRechercheIsbnEnCours] = useState(false)
   const [messageScan, setMessageScan] = useState(null)
+  const [diagnosticScan, setDiagnosticScan] = useState(null)
   const [filtresOuverts, setFiltresOuverts] = useState(false)
   const [recapOuvert, setRecapOuvert] = useState(false)
   const [filtreGenre, setFiltreGenre] = useState(null)
@@ -42,8 +43,9 @@ export default function App() {
     setScannerOuvert(false)
     setRechercheIsbnEnCours(true)
     setMessageScan(null)
+    setDiagnosticScan(null)
 
-    const infos = await lookupBookByIsbn(isbn)
+    const { livre: infos, diagnostics } = await lookupBookByIsbn(isbn)
     setRechercheIsbnEnCours(false)
 
     if (infos) {
@@ -66,9 +68,7 @@ export default function App() {
       })
       setModaleOuverte(true)
     } else {
-      setMessageScan(
-        "Aucun livre trouvé pour ce code-barres. Tu peux ajouter la fiche manuellement."
-      )
+      setDiagnosticScan({ isbn, diagnostics: diagnostics || [] })
       setLivreEnEdition({
         titre: '',
         auteur: '',
@@ -284,6 +284,42 @@ export default function App() {
         </div>
       )}
 
+      {diagnosticScan && (
+        <div style={styles.diagOverlay} onClick={() => setDiagnosticScan(null)}>
+          <div style={styles.diagBoite} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.diagEntete}>
+              <h3 style={styles.diagTitre}>Livre non trouvé</h3>
+              <button
+                onClick={() => setDiagnosticScan(null)}
+                style={styles.diagFermer}
+                aria-label="Fermer"
+              >
+                ✕
+              </button>
+            </div>
+            <p style={styles.diagTexte}>
+              Aucune des sources gratuites n'a trouvé d'informations pour l'ISBN{' '}
+              <strong>{diagnosticScan.isbn}</strong>. Tu peux compléter la fiche manuellement.
+            </p>
+            <p style={styles.diagSousTitre}>Détail technique :</p>
+            <div style={styles.diagListe}>
+              {diagnosticScan.diagnostics.map((d, i) => (
+                <div key={i} style={styles.diagLigne}>
+                  <span style={styles.diagSource}>{d.source}</span>
+                  <span style={styles.diagDetail}>
+                    {d.erreur || 'OK'}
+                    {d.statutHttp ? ` (HTTP ${d.statutHttp})` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setDiagnosticScan(null)} style={styles.diagBoutonFermer}>
+              Compris, fermer
+            </button>
+          </div>
+        </div>
+      )}
+
       <button
         onClick={() => setScannerOuvert(true)}
         style={styles.boutonTampon}
@@ -485,6 +521,85 @@ const styles = {
     boxShadow: 'var(--shadow-card-hover)',
     zIndex: 90,
     cursor: 'pointer'
+  },
+  diagOverlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(60,42,30,0.6)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 110,
+    padding: '16px'
+  },
+  diagBoite: {
+    background: 'var(--paper)',
+    borderRadius: '14px',
+    padding: '20px',
+    maxWidth: '420px',
+    width: '100%',
+    maxHeight: '80vh',
+    overflowY: 'auto',
+    boxShadow: 'var(--shadow-card-hover)'
+  },
+  diagEntete: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '10px'
+  },
+  diagTitre: {
+    fontSize: '1.15rem'
+  },
+  diagFermer: {
+    background: 'none',
+    border: 'none',
+    fontSize: '1.2rem',
+    color: 'var(--ink-soft)',
+    padding: '4px 8px'
+  },
+  diagTexte: {
+    fontSize: '0.9rem',
+    color: 'var(--ink)',
+    lineHeight: 1.5,
+    marginBottom: '14px'
+  },
+  diagSousTitre: {
+    fontSize: '0.78rem',
+    color: 'var(--ink-soft)',
+    fontWeight: 700,
+    marginBottom: '8px'
+  },
+  diagListe: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    marginBottom: '16px'
+  },
+  diagLigne: {
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#FBF6EC',
+    border: '1px solid rgba(60,42,30,0.12)',
+    borderRadius: '8px',
+    padding: '8px 10px',
+    fontSize: '0.8rem'
+  },
+  diagSource: {
+    fontWeight: 700,
+    color: 'var(--ink)'
+  },
+  diagDetail: {
+    color: 'var(--ink-soft)'
+  },
+  diagBoutonFermer: {
+    width: '100%',
+    padding: '12px',
+    borderRadius: '8px',
+    border: 'none',
+    background: 'var(--leather)',
+    color: 'var(--paper)',
+    fontWeight: 700
   },
   boutonTampon: {
     position: 'fixed',
