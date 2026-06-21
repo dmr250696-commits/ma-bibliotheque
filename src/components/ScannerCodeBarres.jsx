@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
-
-const SCANNER_ID = 'lecteur-code-barres'
+import { BrowserMultiFormatReader } from '@zxing/browser'
+import { BarcodeFormat, DecodeHintType, NotFoundException } from '@zxing/library'
 
 export default function ScannerCodeBarres({ onResultat, onFermer }) {
-  const scannerRef = useRef(null)
+  const videoRef = useRef(null)
+  const controlsRef = useRef(null)
+  const readerRef = useRef(null)
   const [erreur, setErreur] = useState(null)
   const [demarre, setDemarre] = useState(false)
 
   useEffect(() => {
+    let annule = false
+
     // Sur iOS Safari, getUserMedia exige un contexte sécurisé (HTTPS, ou
     // localhost en développement). GitHub Pages sert toujours en HTTPS,
     // donc ce cas ne devrait survenir qu'en test local via une IP locale.
@@ -26,54 +29,58 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
       return
     }
 
-    const scanner = new Html5Qrcode(SCANNER_ID, {
-      formatsToSupport: [
-        // formats courants pour les codes-barres de livres (ISBN)
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.UPC_E,
-        Html5QrcodeSupportedFormats.CODE_128
-      ],
-      // Safari/iOS ne supporte pas l'API native BarcodeDetector. On force le
-      // scanner JS interne (ZXing) plutôt que de laisser la librairie tenter
-      // de détecter le support, ce qui a pu être instable sur certaines
-      // versions de WebKit.
-      useBarCodeDetectorIfSupported: false,
-      verbose: false
-    })
-    scannerRef.current = scanner
+    // On limite les formats aux codes-barres de livres pour de meilleures
+    // performances et moins de faux positifs.
+    const hints = new Map()
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+      BarcodeFormat.EAN_13,
+      BarcodeFormat.UPC_A,
+      BarcodeFormat.UPC_E,
+      BarcodeFormat.CODE_128
+    ])
+    hints.set(DecodeHintType.TRY_HARDER, true)
 
-    scanner
-      .start(
-        { facingMode: 'environment' },
+    const reader = new BrowserMultiFormatReader(hints)
+    readerRef.current = reader
+
+    reader
+      .decodeFromConstraints(
         {
-          fps: 10,
-          // Zone de visée en pourcentage de la vidéo plutôt qu'en pixels fixes :
-          // évite les soucis de calibrage selon la résolution de caméra de l'iPhone.
-          qrbox: (largeurVideo, hauteurVideo) => {
-            const taille = Math.floor(Math.min(largeurVideo, hauteurVideo) * 0.75)
-            return {
-              width: Math.min(largeurVideo * 0.85, taille * 1.6),
-              height: Math.floor(taille * 0.5)
-            }
-          },
-          aspectRatio: 1.777,
-          disableFlip: true,
-          videoConstraints: {
+          audio: false,
+          video: {
             facingMode: 'environment',
             width: { ideal: 1920 },
             height: { ideal: 1080 }
           }
         },
-        (texteDecode) => {
-          onResultat(texteDecode)
-        },
-        () => {
-          // erreurs de frame ignorées, c'est normal en continu
+        videoRef.current,
+        (resultat, erreurDecodage) => {
+          if (annule) return
+          if (resultat) {
+            onResultat(resultat.getText())
+            return
+          }
+          // NotFoundException est normal à chaque frame sans code détecté :
+          // on l'ignore silencieusement et on continue de scanner.
+          if (erreurDecodage && !(erreurDecodage instanceof NotFoundException)) {
+            console.warn('Erreur de décodage ignorée :', erreurDecodage)
+          }
         }
       )
-      .then(() => setDemarre(true))
+      .then((controls) => {
+        if (annule) {
+          try {
+            controls.stop()
+          } catch (e) {
+            // déjà arrêté, rien à faire
+          }
+          return
+        }
+        controlsRef.current = controls
+        setDemarre(true)
+      })
       .catch((err) => {
+        if (annule) return
         const nom = err?.name || ''
         if (nom === 'NotAllowedError' || nom === 'PermissionDeniedError') {
           setErreur(
@@ -94,11 +101,20 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
       })
 
     return () => {
-      if (scannerRef.current) {
-        scannerRef.current
-          .stop()
-          .then(() => scannerRef.current.clear())
-          .catch(() => {})
+      annule = true
+      if (controlsRef.current) {
+        try {
+          controlsRef.current.stop()
+        } catch (e) {
+          // déjà arrêté, rien à faire
+        }
+      }
+      if (readerRef.current?.reset) {
+        try {
+          readerRef.current.reset()
+        } catch (e) {
+          // déjà réinitialisé, rien à faire
+        }
       }
     }
   }, [onResultat])
@@ -116,15 +132,18 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
         <p style={styles.consigne}>Vise le code-barres au dos du livre (zone ISBN), à environ 10-15 cm.</p>
 
         <div style={styles.zoneCameraWrapper}>
-          <div id={SCANNER_ID} style={styles.zoneCamera} />
+          <video ref={videoRef} style={styles.video} muted playsInline autoPlay />
           {demarre && (
             <div style={styles.guideOverlay} aria-hidden="true">
               <div style={styles.guideCadre} />
             </div>
           )}
+          {!demarre && !erreur && (
+            <div style={styles.statutOverlay}>
+              <p style={styles.statut}>Démarrage de la caméra…</p>
+            </div>
+          )}
         </div>
-
-        {!demarre && !erreur && <p style={styles.statut}>Démarrage de la caméra…</p>}
 
         {erreur && (
           <div style={styles.erreurBox}>
@@ -180,14 +199,19 @@ const styles = {
     fontSize: '0.9rem',
     marginBottom: '14px'
   },
-  zoneCamera: {
+  zoneCameraWrapper: {
+    position: 'relative',
     borderRadius: '10px',
     overflow: 'hidden',
     minHeight: '240px',
     background: '#000'
   },
-  zoneCameraWrapper: {
-    position: 'relative'
+  video: {
+    width: '100%',
+    height: '100%',
+    minHeight: '240px',
+    objectFit: 'cover',
+    display: 'block'
   },
   guideOverlay: {
     position: 'absolute',
@@ -204,10 +228,15 @@ const styles = {
     borderRadius: '8px',
     boxShadow: '0 0 0 999px rgba(0,0,0,0.25)'
   },
+  statutOverlay: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
   statut: {
-    textAlign: 'center',
-    marginTop: '12px',
-    color: 'var(--ink-soft)',
+    color: 'var(--paper)',
     fontSize: '0.9rem'
   },
   erreurBox: {
