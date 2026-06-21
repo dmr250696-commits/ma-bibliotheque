@@ -26,7 +26,21 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
       return
     }
 
-    const scanner = new Html5Qrcode(SCANNER_ID)
+    const scanner = new Html5Qrcode(SCANNER_ID, {
+      formatsToSupport: [
+        // formats courants pour les codes-barres de livres (ISBN)
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.CODE_128
+      ],
+      // Safari/iOS ne supporte pas l'API native BarcodeDetector. On force le
+      // scanner JS interne (ZXing) plutôt que de laisser la librairie tenter
+      // de détecter le support, ce qui a pu être instable sur certaines
+      // versions de WebKit.
+      useBarCodeDetectorIfSupported: false,
+      verbose: false
+    })
     scannerRef.current = scanner
 
     scanner
@@ -34,13 +48,22 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
         { facingMode: 'environment' },
         {
           fps: 10,
-          qrbox: { width: 260, height: 140 },
-          formatsToSupport: [
-            // formats courants pour les codes-barres de livres (ISBN)
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.UPC_A,
-            Html5QrcodeSupportedFormats.UPC_E
-          ]
+          // Zone de visée en pourcentage de la vidéo plutôt qu'en pixels fixes :
+          // évite les soucis de calibrage selon la résolution de caméra de l'iPhone.
+          qrbox: (largeurVideo, hauteurVideo) => {
+            const taille = Math.floor(Math.min(largeurVideo, hauteurVideo) * 0.75)
+            return {
+              width: Math.min(largeurVideo * 0.85, taille * 1.6),
+              height: Math.floor(taille * 0.5)
+            }
+          },
+          aspectRatio: 1.777,
+          disableFlip: true,
+          videoConstraints: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
         },
         (texteDecode) => {
           onResultat(texteDecode)
@@ -90,9 +113,16 @@ export default function ScannerCodeBarres({ onResultat, onFermer }) {
           </button>
         </div>
 
-        <p style={styles.consigne}>Vise le code-barres au dos du livre (zone ISBN).</p>
+        <p style={styles.consigne}>Vise le code-barres au dos du livre (zone ISBN), à environ 10-15 cm.</p>
 
-        <div id={SCANNER_ID} style={styles.zoneCamera} />
+        <div style={styles.zoneCameraWrapper}>
+          <div id={SCANNER_ID} style={styles.zoneCamera} />
+          {demarre && (
+            <div style={styles.guideOverlay} aria-hidden="true">
+              <div style={styles.guideCadre} />
+            </div>
+          )}
+        </div>
 
         {!demarre && !erreur && <p style={styles.statut}>Démarrage de la caméra…</p>}
 
@@ -155,6 +185,24 @@ const styles = {
     overflow: 'hidden',
     minHeight: '240px',
     background: '#000'
+  },
+  zoneCameraWrapper: {
+    position: 'relative'
+  },
+  guideOverlay: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'none'
+  },
+  guideCadre: {
+    width: '75%',
+    height: '28%',
+    border: '2.5px solid rgba(242, 233, 216, 0.85)',
+    borderRadius: '8px',
+    boxShadow: '0 0 0 999px rgba(0,0,0,0.25)'
   },
   statut: {
     textAlign: 'center',
