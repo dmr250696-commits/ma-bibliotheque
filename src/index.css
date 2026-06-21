@@ -1,0 +1,112 @@
+:root {
+  /* Couleurs */
+  --paper: #F2E9D8;
+  --paper-dim: #E8DCC6;
+  --ink: #3C2A1E;
+  --ink-soft: #6B5440;
+  --leather: #8B4513;
+  --wood: #A8754A;
+  --sage: #5C7A5C;
+  --sage-bg: #E3E9DD;
+  --stamp-red: #B0413E;
+  --stamp-red-bg: #F3DEDC;
+  --gold: #C9A35C;
+
+  /* Typo */
+  --font-display: 'Fraunces', serif;
+  --font-body: 'Source Sans 3', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Ombres */
+  --shadow-card: 0 2px 6px rgba(60, 42, 30, 0.12), 0 1px 2px rgba(60, 42, 30, 0.08);
+  --shadow-card-hover: 0 8px 20px rgba(60, 42, 30, 0.18), 0 2px 6px rgba(60, 42, 30, 0.1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--paper);
+  background-image:
+    radial-gradient(circle at 20% 10%, rgba(139, 69, 19, 0.04) 0%, transparent 45%),
+    radial-gradient(circle at 85% 80%, rgba(92, 122, 92, 0.04) 0%, transparent 45%);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  /* Évite que le contenu passe sous l'encoche/barre de statut en mode
+     standalone (app installée) sur iPhone */
+  padding-top: env(safe-area-inset-top);
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin: 0;
+  color: var(--ink);
+}
+
+p {
+  margin: 0;
+}
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+input, select, textarea {
+  font-family: var(--font-body);
+  /* iOS Safari zoome automatiquement la page si un champ a une police
+     sous 16px au moment du focus. On force 16px minimum ici, et on peut
+     réduire visuellement ailleurs si besoin sans revenir sous ce seuil. */
+  font-size: 16px;
+}
+
+/* Visible focus pour accessibilité clavier */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.label-mono {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
