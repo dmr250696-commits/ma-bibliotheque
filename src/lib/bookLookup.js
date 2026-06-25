@@ -1,9 +1,132 @@
 // Recherche les infos d'un livre (titre, auteur, couverture) à partir d'un ISBN.
-// Essaie Open Library (API books), puis Google Books, puis l'index de
-// recherche Open Library (qui couvre parfois des éditions absentes de
-// l'API books) — utile notamment pour des éditions françaises moins
-// répandues internationalement.
+// Sources interrogées dans l'ordre de pertinence :
+//   1. BnF (catalogue officiel français — le plus complet pour les éditions françaises)
+//   2. Google Books (bonne couverture internationale)
+//   3. Open Library books (catalogue contributif international)
+//   4. Open Library search (index de recherche plus large qu'OL books)
+//   5. OCLC Classify (fallback international, XML gratuit sans clé)
 
+// ─── BnF (Bibliothèque nationale de France) ────────────────────────────────
+// API SRU officielle, sans clé, sans limite. Réponse en XML Dublin Core.
+// Couvre exhaustivement tous les livres publiés en France (dépôt légal).
+async function fetchFromBnf(isbn) {
+  const diag = { source: 'BnF (catalogue français)' }
+  try {
+    const url = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn%20adj%20%22${isbn}%22&recordSchema=dublincore&maximumRecords=1`
+    const res = await fetch(url)
+    diag.statutHttp = res.status
+    if (!res.ok) {
+      diag.erreur = `HTTP ${res.status}`
+      return { resultat: null, diag }
+    }
+    const texte = await res.text()
+    const xml = new DOMParser().parseFromString(texte, 'application/xml')
+
+    const nbResultats = xml.querySelector('numberOfRecords')?.textContent?.trim()
+    if (!nbResultats || nbResultats === '0') {
+      diag.erreur = 'ISBN absent du catalogue BnF'
+      return { resultat: null, diag }
+    }
+
+    const dc = (tag) => xml.querySelector(`*|${tag}`)?.textContent?.trim() || ''
+
+    // La BnF met souvent auteur et titre dans dc:title et dc:creator.
+    // Format typique dc:title : "Le titre / Prénom Nom"
+    const titreRaw = dc('title')
+    const titre = titreRaw.split(' / ')[0].trim()
+    const auteurDcTitle = titreRaw.includes(' / ') ? titreRaw.split(' / ')[1]?.trim() : ''
+    const auteur = dc('creator') || auteurDcTitle
+
+    // dc:date peut contenir "2004" ou "2004-01-01"
+    const annee = dc('date').substring(0, 4)
+
+    // Récupère le numéro ARK pour construire l'URL de couverture BnF
+    const identifier = dc('identifier')
+    const arkMatch = identifier.match(/ark:\/12148\/(cb\w+)/)
+    const couverture = arkMatch
+      ? `https://catalogue.bnf.fr/couverture?appName=NE&idArk=ark:/12148/${arkMatch[1]}&couverture=1`
+      : null
+
+    // dc:description peut contenir le nb de pages : "337 p."
+    const description = dc('description')
+    const pagesMatch = description.match(/(\d+)\s*p/)
+    const nb_pages = pagesMatch ? parseInt(pagesMatch[1], 10) : null
+
+    const editeur = dc('publisher')
+    const sujet = dc('subject')
+
+    return {
+      resultat: {
+        isbn,
+        titre,
+        auteur,
+        couverture,
+        editeur,
+        annee,
+        nb_pages,
+        categories_api: sujet
+      },
+      diag
+    }
+  } catch (e) {
+    diag.erreur = `Exception réseau : ${e?.message || e}`
+    return { resultat: null, diag }
+  }
+}
+
+// ─── OCLC Classify ─────────────────────────────────────────────────────────
+// API publique OCLC (WorldCat), sans clé requise. Réponse en XML.
+// Très large couverture internationale (500M+ notices).
+async function fetchFromOclcClassify(isbn) {
+  const diag = { source: 'OCLC Classify (WorldCat)' }
+  try {
+    const res = await fetch(
+      `https://classify.oclc.org/classify2/Classify?isbn=${isbn}&summary=true`
+    )
+    diag.statutHttp = res.status
+    if (!res.ok) {
+      diag.erreur = `HTTP ${res.status}`
+      return { resultat: null, diag }
+    }
+    const texte = await res.text()
+    const xml = new DOMParser().parseFromString(texte, 'application/xml')
+
+    // Code de réponse OCLC : 0 = trouvé exact, 2 = plusieurs éditions
+    const code = xml.querySelector('response')?.getAttribute('code')
+    if (code !== '0' && code !== '2') {
+      diag.erreur = `ISBN non trouvé (code OCLC : ${code || 'inconnu'})`
+      return { resultat: null, diag }
+    }
+
+    const work = xml.querySelector('work')
+    const title = work?.getAttribute('title') || ''
+    const author = work?.getAttribute('author') || ''
+
+    if (!title) {
+      diag.erreur = 'Titre absent dans la réponse OCLC'
+      return { resultat: null, diag }
+    }
+
+    return {
+      resultat: {
+        isbn,
+        titre: title,
+        auteur: author,
+        couverture: null, // OCLC Classify ne fournit pas de couvertures
+        editeur: '',
+        annee: '',
+        nb_pages: null,
+        categories_api: ''
+      },
+      diag
+    }
+  } catch (e) {
+    diag.erreur = `Exception réseau : ${e?.message || e}`
+    return { resultat: null, diag }
+  }
+}
+
+// ─── Open Library (API books) ───────────────────────────────────────────────
 async function fetchFromOpenLibrary(isbn) {
   const diag = { source: 'Open Library (books)' }
   try {
@@ -41,6 +164,7 @@ async function fetchFromOpenLibrary(isbn) {
   }
 }
 
+// ─── Google Books ───────────────────────────────────────────────────────────
 async function fetchFromGoogleBooks(isbn) {
   const diag = { source: 'Google Books' }
   try {
@@ -77,6 +201,7 @@ async function fetchFromGoogleBooks(isbn) {
   }
 }
 
+// ─── Open Library (index de recherche) ─────────────────────────────────────
 async function fetchFromOpenLibrarySearch(isbn) {
   const diag = { source: 'Open Library (search)' }
   try {
@@ -114,47 +239,66 @@ async function fetchFromOpenLibrarySearch(isbn) {
   }
 }
 
+// ─── Orchestration ──────────────────────────────────────────────────────────
 // Retourne { livre, diagnostics } où diagnostics est toujours rempli (utile
 // en cas d'échec pour comprendre la cause exacte), même si livre est null.
+// Stratégie : on interroge BnF et Google Books en parallèle (les plus fiables),
+// puis en cascade Open Library et OCLC seulement si rien n'a été trouvé,
+// pour limiter le nombre de requêtes inutiles.
 export async function lookupBookByIsbn(isbn) {
   const cleanIsbn = isbn.replace(/[^0-9Xx]/g, '')
   const diagnostics = []
 
-  const { resultat: resultatOpenLibrary, diag: diagOpenLibrary } = await fetchFromOpenLibrary(cleanIsbn)
-  diagnostics.push(diagOpenLibrary)
+  // Étape 1 — Sources principales en parallèle (BnF + Google Books)
+  const [{ resultat: resBnf, diag: diagBnf }, { resultat: resGoogle, diag: diagGoogle }] =
+    await Promise.all([fetchFromBnf(cleanIsbn), fetchFromGoogleBooks(cleanIsbn)])
+  diagnostics.push(diagBnf, diagGoogle)
 
-  const { resultat: resultatGoogle, diag: diagGoogle } = await fetchFromGoogleBooks(cleanIsbn)
-  diagnostics.push(diagGoogle)
+  const sourcesEtape1 = [resBnf, resGoogle].filter((r) => r?.titre?.trim())
 
-  // On n'interroge l'index de recherche que si les deux premières sources
-  // n'ont rien donné de complet, pour limiter le nombre de requêtes.
-  const openLibraryOk = resultatOpenLibrary?.titre?.trim()
-  const googleOk = resultatGoogle?.titre?.trim()
-  let resultatOpenLibrarySearch = null
-  if (!openLibraryOk && !googleOk) {
-    const { resultat, diag } = await fetchFromOpenLibrarySearch(cleanIsbn)
-    resultatOpenLibrarySearch = resultat
-    diagnostics.push(diag)
+  if (sourcesEtape1.length > 0) {
+    // Au moins une source principale a trouvé le livre — on fusionne et on retourne.
+    return { livre: fusionner(sourcesEtape1), diagnostics }
   }
 
-  // Diagnostic visible dans la console du navigateur, utile en cas de souci.
+  // Étape 2 — Fallbacks en parallèle (Open Library books + search)
+  const [
+    { resultat: resOL, diag: diagOL },
+    { resultat: resOLSearch, diag: diagOLSearch }
+  ] = await Promise.all([
+    fetchFromOpenLibrary(cleanIsbn),
+    fetchFromOpenLibrarySearch(cleanIsbn)
+  ])
+  diagnostics.push(diagOL, diagOLSearch)
+
+  const sourcesEtape2 = [resOL, resOLSearch].filter((r) => r?.titre?.trim())
+
+  if (sourcesEtape2.length > 0) {
+    return { livre: fusionner(sourcesEtape2), diagnostics }
+  }
+
+  // Étape 3 — Dernier recours : OCLC Classify (titre + auteur uniquement)
+  const { resultat: resOclc, diag: diagOclc } = await fetchFromOclcClassify(cleanIsbn)
+  diagnostics.push(diagOclc)
+
   console.info('Résultat ISBN', cleanIsbn, diagnostics)
 
-  const sourcesValides = [resultatOpenLibrary, resultatGoogle, resultatOpenLibrarySearch].filter(
-    (r) => r?.titre?.trim()
-  )
-
-  if (sourcesValides.length === 0) {
-    return { livre: null, diagnostics }
+  if (resOclc?.titre?.trim()) {
+    return { livre: resOclc, diagnostics }
   }
 
-  // On part de la première source valide, on comble les trous avec les autres.
-  const [base, ...autres] = sourcesValides
+  return { livre: null, diagnostics }
+}
+
+// Fusionne plusieurs résultats en privilégiant le premier (le plus complet),
+// et comble les champs vides avec les suivants.
+function fusionner(sources) {
+  const [base, ...autres] = sources
   const fusionne = { ...base }
   for (const appoint of autres) {
-    for (const cle of ['couverture', 'editeur', 'annee', 'nb_pages', 'categories_api', 'auteur']) {
+    for (const cle of ['couverture', 'editeur', 'annee', 'nb_pages', 'categories_api', 'auteur', 'titre']) {
       if (!fusionne[cle] && appoint[cle]) fusionne[cle] = appoint[cle]
     }
   }
-  return { livre: fusionne, diagnostics }
+  return fusionne
 }
